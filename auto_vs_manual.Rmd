@@ -1,0 +1,136 @@
+---
+author: "Gian Balsamo"
+date: "October 2015"
+geometry: margin=1cm
+output:
+      pdf_document:
+      keep_tex: yes
+header-includes: \usepackage{graphicx}
+---
+## Regression Models Course Project
+
+```{r setoptions,echo=FALSE,include=FALSE}
+library(knitr)
+library(ggplot2)
+library(datasets)
+library(dplyr)
+library(gridExtra)
+library(lmtest)
+data(mtcars)
+opts_chunk$set(echo=FALSE, results="hide",fig.align='center',dev='pdf')
+```
+
+```{r data cleaning}
+myCars<-tbl_df(mtcars)
+myCars<-select(myCars, -c(drat,vs))
+myCars$model<-c("M1","M2","Da","H4","HS","V","Du","M240","M230",
+                "M280","M280C","M450SE","M450SL","M450SLC","CF",
+                "LC","CI","F128","HC","Tolla","Tona","DC","AMC",
+                "CZ","PF","FX1","Po","LE","FP","FD","MB","Vo")
+legend<-cbind(rownames(mtcars),myCars$model)
+myCars<-arrange(myCars,mpg)
+myCars$am<-as.factor(myCars$am)
+myCars$cyl<-as.factor(myCars$cyl)
+myCars$gear<-as.factor(myCars$gear)
+myCars$carb<-as.factor(myCars$carb)
+myCars<-mutate(myCars,speed=(1/qsec)*1000)
+```
+## Summary
+Suppose you are given a sample of 10 dark-haired Italians and 10 blond Norwegians, and  asked to use this sample to ascertain whether hair color determines nationality. In the present report I am going to disentangle an analogous conundrum. Given fuel consumption and 10 aspects of automobile design for 32 car models from 1973-1974 from the dataset "mtcars", I will show that in the Seventies a manual transmission was better than an automatic one for fuel consumption.  
+
+### Report  
+The key variables in our data set are: miles per gallon (mog), number of cylinders (cyl), total air displaced by the pistons (disp), horsepower (hp), weight (wt), time needed to cover 1/4 mile (qsec), automatic or manual drive (am, a binary variable where 0 stands for automatic and 1 for manual), and several other variables (cyl,vs,gear,carb) whose values may be considered proxies of either horsepower or air displaced. To these I added speed (=1/qsec) and a measure of overpower (= hp/wt) suggested by H. Henderson and P. Velleman in their 1981 "Building Multiple Regression Models Interactively." I also assigned abbreviated names to the 32 cars, as seen in the graphs.
+
+```{r figures1}
+automatic <- myCars[myCars$am == 0,]
+manual <- myCars[myCars$am == 1,]
+tTest<-t.test(automatic$mpg, manual$mpg)[3]
+```
+Fuel-consumption-wise, the automatic-drive and manual-drive cars in our dataset clearly belong to distinct population with different mpg means, namely, `r round(mean(automatic$mpg),2)` for automatic-drive cars and `r round(mean(manual$mpg),2)` for manual-drive cars. The P-value of the Welch Two Sample t-test rejects the null hypothesis: `r tTest` But take a look at Graph 1: 
+
+```{r first,fig.width=5.5,fig.height=3.15,results='asis'}
+ggplot(myCars,aes(y=mpg,x= speed,color=am))+
+      geom_text(aes(label=model,size=0.003))+
+      stat_smooth(method = "lm",se=F)+
+      ggtitle("Graph 1\nspeed vs mpg by drive")+
+      theme(legend.title = element_text(colour="black", size=10, face="bold"))+
+      scale_color_discrete(name="manual\nvs auto")
+```
+ 
+When we scatterplot fuel consumption versus speed for automatic-drive cars (red colored) and manual-drive cars (green colored), the graph reminds us of an unrandomized multiple testing. The gap between intercepts is huge and the divergence between slopes slight. Without some drastic purging ont the data, the variable drive would have no predictive value.  
+Our dataset consists of three distinct groups: nimble, manual-drive speed cars whose mpg and speed-vs-weight ratio benefit from light weight of chassis and bodywork; massive, automatic-drive status cars whose mpg and speed-vs-weight ratio suffer from excessive weight, disp, and hp; subcompact and compact, manual-drive cars whose mpg and speed-vs-weight ratio benefit, just like nimble sport cars, from light weight of chassis and bodywork. In our dataset the expensive sport cars and the compacts and sub-compacts are bunched up together in the same group - which explains the looks of Graph 1.
+This is what I did. I split the data into 2 separate sets according to drive (manual or automatic). Based on the scatterplots of mpg versus, respectively, wt, disp, speed, and hp (see Graph 2 and Graph 3 in the Appendix), I applied to both datasets a tool of influence/leverage diagnosis, using mpg-vs-hp for manual-drive cars and mpg-vs-weight for automatic-drive cars, and got rid of outliers. I bound the two sets together again, obtaining a smaller dataset (20 rows versus the original 32). Then I went into bootstrapping mode by samplig my new dataset a thousand times with replacement; this provided me with a 1000 x 12 data frame. Then I performed stepwise model selection using backwards elimination. Then I applied the resulting AIC model to my dataset. 
+
+```{r backwards elimination,echo=TRUE}
+practicalCars<-filter(myCars,am=="1")
+prestigeCars<-filter(myCars,am=="0")
+fitHp<- lm(mpg~hp,data=practicalCars)
+hatvalues(fitHp)
+practicalCars<-filter(practicalCars,model!="MB",model!="FP",model!="HC")
+fitWt<-lm(mpg~wt,data=prestigeCars)
+hatvalues(fitWt)
+prestigeCars<-filter(prestigeCars, model!="LC" ,  model != "CI" , model != "CF",model!="Tona",model!="M230",model!="M240",model!="H4",model!="M280", model!="HS")
+practicalCars<-mutate(practicalCars,overpower=practicalCars$hp/practicalCars$wt)
+prestigeCars<-mutate(prestigeCars,overpower=prestigeCars$hp/prestigeCars$wt)
+data<-rbind(practicalCars,prestigeCars)
+vettore<-sample(1:20,1000,replace=T)
+automobili<-data.frame()
+for (i in vettore) {automobili<-rbind(automobili,data[i,])}
+automobiliSmall<-select(automobili,mpg,disp,hp,overpower,am,speed)
+full.model <- lm(mpg ~ ., data = automobiliSmall)
+step(full.model, direction = "backward")
+```
+
+```{r my model,echo=TRUE,results='markup'}
+modelFit3<-lm(mpg~disp+speed+am+overpower+hp,data=automobiliSmall)
+summary(modelFit3)$coef
+```
+
+The AIC model's coefficients are shown above. The adjusted R-squared is `r summary(modelFit3)[9]`. I then ran 4 alternative models using combinations of am, overpower, speed, hp, disp, hp x am, and overpower x am as predictors(models not shown for lack of space), and applied the likelyhood ratio test to each versus the AIC model. The following P-values of the Chi-Square distributions confirm the AIC model as the most effective. 
+
+```{r alternative models,results='markup'}
+modelFitA<-lm(mpg ~ am + overpower+speed+speed*am, data = automobiliSmall)
+modelFitB<-lm(mpg ~ am + hp+hp*am, data = automobiliSmall)
+modelFitC<-lm(mpg ~ am + overpower+overpower*am, data = automobiliSmall)
+modelFitD<-lm(mpg ~ am + overpower+disp, data = automobiliSmall)
+a<-lrtest(modelFitA, modelFit3)[2,5]
+b<-lrtest(modelFitB, modelFit3)[2,5]
+c<-lrtest(modelFitC, modelFit3)[2,5]
+d<-lrtest(modelFitD, modelFit3)[2,5]
+as.vector(c(a,b,c,d))
+```
+
+**From the above results I conclude that in the Seventies a manual transmission was better than an automatic one for MPG.**  
+*My model's intercept, which reflects the effect of automatic drive, is `r round(modelFit3$coef[1],2)`. The coefficient of manual drive is `r round(modelFit3$coef[4],2)`, which indicates that a manual drive would improve fuel consumption of `r round(modelFit3$coef[4],2)` miles per gallon.*  
+
+### Appendix
+
+```{r g2,fig.width=7.5,fig.height=7.5,results='asis'}
+q<-ggplot(practicalCars,aes(x=disp,y=mpg))+
+      geom_text(aes(label=model,size=0.003))
+w<-ggplot(practicalCars,aes(x=hp,y=mpg))+
+      geom_text(aes(label=model,size=0.003))
+r<-ggplot(practicalCars,aes(x=wt,y=mpg))+
+      geom_text(aes(label=model,size=0.003))
+g<-ggplot(practicalCars,aes(x=speed,y=mpg))+
+      geom_text(aes(label=model,size=0.003))
+graph_2<-grid.arrange(q,w,r,g,ncol=2,nrow=2,top="Graph 2\nmanual drive cars")
+```
+
+
+```{r g3,fig.width=7.5,fig.height=7.5,results='asis'}
+q<-ggplot(prestigeCars,aes(x=disp,y=mpg))+
+       geom_text(aes(label=model,size=0.003))
+ w<-ggplot(prestigeCars,aes(x=hp,y=mpg))+
+       geom_text(aes(label=model,size=0.003))
+ r<-ggplot(prestigeCars,aes(x=wt,y=mpg))+
+       geom_text(aes(label=model,size=0.003))
+u<-ggplot(prestigeCars,aes(x=speed,y=mpg))+
+       geom_text(aes(label=model,size=0.003))
+ graph_3<-grid.arrange(q,w,r,u,ncol=2,nrow=2,top="Graph 3\nautomatic drive cars")
+```
+
+```{r residual_plots,fig.width=7.5,fig.height=7.5,results='asis'}
+par(mfrow=c(2, 2))
+plot(modelFit3)
+```
